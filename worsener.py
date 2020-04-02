@@ -23,19 +23,34 @@ def Plus():
     return Leaf(token.PLUS, "+")
 
 
+def Space():
+    return String(" ")
+
+
 def TupleNode(*args):
     parts = []
     for arg in args:
+        if parts:
+            parts.append(Space())
+        arg = arg.clone()
+        arg.prefix = arg.prefix.lstrip()
         parts.append(arg)
         parts.append(Comma())
+    if len(parts) != 2:
+        parts.pop()
     return Node(SYMBOL.atom, [LParen(), *parts, RParen()])
 
 
 def ListNode(*args):
     parts = []
     for arg in args:
+        if parts:
+            parts.append(Space())
+        arg = arg.clone()
+        arg.prefix = arg.prefix.lstrip()
         parts.append(arg)
         parts.append(Comma())
+    parts.pop()
     return Node(SYMBOL.atom, [LBrace(), *parts, RBrace()])
 
 
@@ -46,7 +61,7 @@ def modify_attr(node: LN, capture: Capture, filename: Filename) -> Optional[LN]:
             args=[
                 capture["obj"].clone(),
                 Comma(),
-                String(" "),
+                Space(),
                 String('"' + capture["attr"].value + '"'),
             ],
         )
@@ -60,26 +75,30 @@ def filter_dict_literal(node: LN, capture: Capture, filename: Filename) -> bool:
 def modify_dict_literal(node: LN, capture: Capture, filename: Filename) -> Optional[LN]:
     toks = iter(capture.get("body"))
     items = []
+    prefix = ""
     while True:
         try:
             tok = next(toks)
             if tok.type == TOKEN.DOUBLESTAR:
-                body = next(toks)
-                items.append(body.clone())
+                body = next(toks).clone()
+                body.prefix = prefix + tok.prefix + body.prefix
+                items.append(body)
             else:
-                next(toks)  # colon
-                value = next(toks)
+                colon = next(toks)
+                value = next(toks).clone()
+                value.prefix = colon.prefix + value.prefix
                 if items and isinstance(items[-1], list):
-                    items[-1].append(TupleNode(tok.clone(), value.clone()))
+                    items[-1].append(TupleNode(tok, value))
                 else:
-                    items.append([TupleNode(tok.clone(), value.clone())])
-            next(toks)  # comma
+                    items.append([TupleNode(tok, value)])
+            comma = next(toks)
+            prefix = comma.prefix
         except StopIteration:
             break
     listitems = []
     for item in items:
         if listitems:
-            listitems.append(Plus())
+            listitems.extend([Space(), Plus(), Space()])
         if isinstance(item, list):
             listitems.append(ListNode(*item))
         else:
@@ -88,6 +107,7 @@ def modify_dict_literal(node: LN, capture: Capture, filename: Filename) -> Optio
     args = listitems
     if len(listitems) > 1:
         args = [Node(SYMBOL.arith_expr, args)]
+    args.append(String(node.children[-1].prefix))
     return Call(Name("dict"), args, prefix=node.prefix)
 
 
@@ -108,7 +128,7 @@ def main():
         .select("""atom< "{" dictsetmaker< body=any* > "}" >""")
         .filter(filter_dict_literal)
         .modify(modify_dict_literal)
-        .idiff()
+        .diff()
     )
 
 
